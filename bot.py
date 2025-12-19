@@ -1,14 +1,26 @@
 import os
 import tempfile
 import requests
-import re  # Nuovo: per cercare URL
+import re
+from threading import Thread
+from flask import Flask
 from telegram import Update, InputMediaPhoto
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import yt_dlp
 
-TOKEN = "8591474529:AAEHPxi6w5ZOcjvJLlz5uATBgclGp4wah8c"  # <-- Cambia solo qui!
+TOKEN = os.getenv("TOKEN")
 
-# Regex per trovare URL nel messaggio
+# Flask app finta per tenere Render sveglio
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Shadow Extractor System is alive. Ready to raid gates. 🗡️", 200
+
+def run_flask():
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 10000)))
+
+# Regex per URL
 URL_REGEX = re.compile(r'https?://[^\s]+', re.IGNORECASE)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -27,29 +39,26 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message_text = update.message.text or ""
     
-    # Cerca URL nel messaggio
     urls = URL_REGEX.findall(message_text)
     
     if not urls:
-        # Nessun link trovato → ignora silenziosamente (no spam!)
         return
     
-    url = urls[0]  # Prende il primo link trovato
+    url = urls[0]
     
     status_msg = await update.message.reply_text("🗡️ Opening the Gate... Extracting shadow essence.")
 
-    # Se è TikTok → fallback diretto
     if "tiktok" in url.lower():
         await status_msg.edit_text("🗡️ TikTok Gate detected... entering Shadow Realm.")
     else:
-        # Prova yt-dlp per altri siti
         ydl_opts = {
-            'format': 'bv*+ba/b',
+            'format': 'best[height<=720]/best',  # Fix YouTube: evita formati che richiedono login
             'outtmpl': '%(title)s.%(ext)s',
             'noplaylist': True,
             'merge_output_format': 'mp4',
             'quiet': True,
             'no_warnings': True,
+            'cookiefile': '',  # Evita richieste login dove possibile
         }
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -114,10 +123,15 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await status_msg.edit_text(f"❌ Gate collapsed: {str(err)[:200]}")
 
 def main():
+    # Avvia Flask in background
+    flask_thread = Thread(target=run_flask)
+    flask_thread.daemon = True
+    flask_thread.start()
+    
+    # Avvia il bot Telegram
     app = Application.builder().token(TOKEN).build()
     
     app.add_handler(CommandHandler("start", start))
-    # Risponde solo ai messaggi di testo che contengono URL
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, download_video))
     
     print("Shadow Extractor System online... Ready to raid gates. 🗡️")
