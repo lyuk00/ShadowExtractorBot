@@ -167,21 +167,24 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
 # ===============================
-# Avvio
+# Avvio stabile
 # ===============================
-def start_bot():
+def run_flask():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
+
+if __name__ == "__main__":
+    # Flask in thread separato (non blocca il bot)
+    Thread(target=run_flask, daemon=True).start()
+    
+    # Bot Telegram in foreground (bloccante)
     tg_app = Application.builder().token(TOKEN).build()
     tg_app.add_handler(CommandHandler("start", start))
-    tg_app.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, download_video)
-    )
+    tg_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, download_video))
+    
     print("Shadow Extractor System online... Ready to raid gates. 🗡️")
     tg_app.run_polling()
 
-if __name__ == "__main__":
-    Thread(target=start_bot, daemon=True).start()
 
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
 
 
