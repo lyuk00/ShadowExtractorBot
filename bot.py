@@ -19,6 +19,7 @@ if not TOKEN:
 # Flask app for Render always-on
 # ===============================
 app = Flask(__name__)
+
 @app.route("/")
 def home():
     return "Shadow Extractor System is alive. Ready to raid gates. 🗡️", 200
@@ -51,10 +52,11 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     url = urls[0]
     status_msg = await update.message.reply_text(
-        "🗡️ Opening the Gate... Extracting shadow essence in MAX QUALITY."
+        "🗡️ Opening the Gate... Extracting shadow essence."
     )
+
     # ===============================
-    # TikTok via API (già alta qualità)
+    # TikTok via API (alta qualità)
     # ===============================
     if "tiktok" in url.lower():
         await status_msg.edit_text("🗡️ TikTok Gate detected... entering Shadow Realm.")
@@ -66,83 +68,77 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 raise Exception("Shadow Realm sealed")
             video_data = data["data"]
             title = video_data.get("title", "Shadow Essence").strip()
-            music_title = video_data.get("music_info", {}).get(
-                "title", "Necromancer's Tune"
-            )
+            music_title = video_data.get("music_info", {}).get("title", "Necromancer's Tune")
             music_url = video_data["music"]
             if video_data.get("images"):
-                await status_msg.edit_text(
-                    f"🗡️ Photo Gate breached!\n{len(video_data['images'])} shadows + BGM extracted."
-                )
-                media_group = [
-                    InputMediaPhoto(
-                        media=requests.get(img, timeout=30).content
-                    )
-                    for img in video_data["images"]
-                ]
+                await status_msg.edit_text(f"🗡️ Photo Gate breached!\n{len(video_data['images'])} shadows + BGM extracted.")
+                media_group = [InputMediaPhoto(media=requests.get(img, timeout=30).content) for img in video_data["images"]]
                 await update.message.reply_media_group(media=media_group)
                 music_resp = requests.get(music_url, timeout=60)
-                await update.message.reply_audio(
-                    audio=music_resp.content,
-                    caption=f"🎵 BGM: {music_title}",
-                )
+                await update.message.reply_audio(audio=music_resp.content, caption=f"🎵 BGM: {music_title}")
                 await status_msg.delete()
                 return
-            # Priorità: hdplay > play > wmplay (hdplay è la qualità più alta senza watermark)
             video_url = video_data.get("hdplay") or video_data.get("play") or video_data.get("wmplay")
             video_resp = requests.get(video_url, timeout=60)
-            await update.message.reply_video(
-                video=video_resp.content,
-                caption=f"🗡️ {title}\nCleared in MAX QUALITY without watermark ⚔️",
-            )
+            await update.message.reply_video(video=video_resp.content, caption=f"🗡️ {title}\nCleared in MAX QUALITY without watermark ⚔️")
             music_resp = requests.get(music_url, timeout=60)
-            await update.message.reply_audio(
-                audio=music_resp.content,
-                caption=f"🎵 Original BGM: {music_title}",
-            )
+            await update.message.reply_audio(audio=music_resp.content, caption=f"🎵 Original BGM: {music_title}")
             await status_msg.delete()
             return
         except Exception as err:
-            await status_msg.edit_text(
-                f"❌ Gate collapsed: {str(err)[:200]}"
-            )
+            await status_msg.edit_text(f"❌ Gate collapsed: {str(err)[:200]}")
             return
+
     # ===============================
-    # Tutto il resto via yt-dlp (qualità massima)
+    # Tutto il resto via yt-dlp con fallback qualità
     # ===============================
-    ydl_opts = {
-        "format": "bestvideo+bestaudio/best",  # Qualità massima possibile (1080p+ se disponibile)
+    await status_msg.edit_text("🗡️ Attempting MAX QUALITY extraction...")
+    ydl_opts_high = {
+        "format": "bestvideo+bestaudio/best",
         "noplaylist": True,
         "merge_output_format": "mp4",
         "quiet": True,
         "no_warnings": True,
         "retries": 3,
-        "concurrent_fragment_downloads": 1,
         "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3",
+        "cookiefile": "cookies.txt",  # Prova con cookies per max quality
     }
+
     with tempfile.TemporaryDirectory() as tmpdir:
-        ydl_opts["outtmpl"] = os.path.join(tmpdir, "%(title)s.%(ext)s")
+        ydl_opts_high["outtmpl"] = os.path.join(tmpdir, "%(title)s.%(ext)s")
         try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            with yt_dlp.YoutubeDL(ydl_opts_high) as ydl:
                 info = ydl.extract_info(url, download=True)
                 filename = ydl.prepare_filename(info)
-            await status_msg.edit_text(
-                "⚔️ Extraction complete. Delivering the loot in MAX QUALITY..."
+            quality_note = "MAX QUALITY"
+        except:
+            await status_msg.edit_text("🗡️ MAX QUALITY blocked... falling back to HIGH QUALITY.")
+            ydl_opts_safe = {
+                "format": "best[height<=720]/best",
+                "noplaylist": True,
+                "merge_output_format": "mp4",
+                "quiet": True,
+                "no_warnings": True,
+                "retries": 3,
+                "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3",
+            }
+            ydl_opts_safe["outtmpl"] = os.path.join(tmpdir, "%(title)s.%(ext)s")
+            with yt_dlp.YoutubeDL(ydl_opts_safe) as ydl:
+                info = ydl.extract_info(url, download=True)
+                filename = ydl.prepare_filename(info)
+            quality_note = "HIGH QUALITY (fallback)"
+
+        await status_msg.edit_text(f"⚔️ Extraction complete. Delivering the loot in {quality_note}...")
+        with open(filename, "rb") as video_file:
+            await update.message.reply_video(
+                video=video_file,
+                caption=(
+                    f"🗡️ {info.get('title', 'Essence')}\n"
+                    f"Extracted from {info.get('extractor_key', 'Gate')} in {quality_note}\n"
+                    "Rank up, Hunter."
+                ),
             )
-            with open(filename, "rb") as video_file:
-                await update.message.reply_video(
-                    video=video_file,
-                    caption=(
-                        f"🗡️ {info.get('title', 'Essence')}\n"
-                        f"Extracted from {info.get('extractor_key', 'Gate')} in MAX QUALITY\n"
-                        "Rank up, Hunter."
-                    ),
-                )
-            await status_msg.delete()
-        except Exception as e:
-            await status_msg.edit_text(
-                f"❌ Gate collapsed: unable to breach this dungeon.\nError: {str(e)[:150]}"
-            )
+        await status_msg.delete()
 
 # ===============================
 # Avvio stabile
@@ -150,19 +146,18 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
+
 if __name__ == "__main__":
-    # Flask in thread separato (non blocca il bot)
+    # Flask in thread separato
     Thread(target=run_flask, daemon=True).start()
-   
-    # Bot Telegram in foreground (bloccante)
+
+    # Bot Telegram
     tg_app = Application.builder().token(TOKEN).build()
     tg_app.add_handler(CommandHandler("start", start))
     tg_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, download_video))
-   
+
     print("Shadow Extractor System online... Ready to raid gates. 🗡️")
     tg_app.run_polling()
-
-
 
 
 
