@@ -40,7 +40,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• TikTok (videos & photo gates)\n"
         "• YouTube Shorts\n"
         "• And many other dungeons...\n\n"
-        "I will extract the essence without watermark. ⚔️\n"
+        "I will extract the essence in MAX QUALITY without watermark. ⚔️\n"
         "Level up your library. Rise, Hunter."
     )
 
@@ -51,10 +51,10 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     url = urls[0]
     status_msg = await update.message.reply_text(
-        "🗡️ Opening the Gate... Extracting shadow essence."
+        "🗡️ Opening the Gate... Extracting shadow essence in MAX QUALITY."
     )
     # ===============================
-    # TikTok via API
+    # TikTok via API (già alta qualità)
     # ===============================
     if "tiktok" in url.lower():
         await status_msg.edit_text("🗡️ TikTok Gate detected... entering Shadow Realm.")
@@ -88,15 +88,12 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 await status_msg.delete()
                 return
-            video_url = (
-                video_data.get("play")
-                or video_data.get("hdplay")
-                or video_data.get("wmplay")
-            )
+            # Priorità: hdplay > play > wmplay (hdplay è la qualità più alta senza watermark)
+            video_url = video_data.get("hdplay") or video_data.get("play") or video_data.get("wmplay")
             video_resp = requests.get(video_url, timeout=60)
             await update.message.reply_video(
                 video=video_resp.content,
-                caption=f"🗡️ {title}\nCleared without watermark ⚔️",
+                caption=f"🗡️ {title}\nCleared in MAX QUALITY without watermark ⚔️",
             )
             music_resp = requests.get(music_url, timeout=60)
             await update.message.reply_audio(
@@ -111,10 +108,10 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
     # ===============================
-    # Tutto il resto via yt-dlp
+    # Tutto il resto via yt-dlp (qualità massima)
     # ===============================
     ydl_opts = {
-        "format": "best[height<=720]/best",
+        "format": "bestvideo+bestaudio/best",  # Qualità massima possibile (1080p+ se disponibile)
         "noplaylist": True,
         "merge_output_format": "mp4",
         "quiet": True,
@@ -122,7 +119,6 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "retries": 3,
         "concurrent_fragment_downloads": 1,
         "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3",
-        "cookiefile": "cookies.txt"  # Fix bot detection su YouTube
     }
     with tempfile.TemporaryDirectory() as tmpdir:
         ydl_opts["outtmpl"] = os.path.join(tmpdir, "%(title)s.%(ext)s")
@@ -131,14 +127,14 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 info = ydl.extract_info(url, download=True)
                 filename = ydl.prepare_filename(info)
             await status_msg.edit_text(
-                "⚔️ Extraction complete. Delivering the loot..."
+                "⚔️ Extraction complete. Delivering the loot in MAX QUALITY..."
             )
             with open(filename, "rb") as video_file:
                 await update.message.reply_video(
                     video=video_file,
                     caption=(
                         f"🗡️ {info.get('title', 'Essence')}\n"
-                        f"Extracted from {info.get('extractor_key', 'Gate')}\n"
+                        f"Extracted from {info.get('extractor_key', 'Gate')} in MAX QUALITY\n"
                         "Rank up, Hunter."
                     ),
                 )
@@ -147,9 +143,10 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await status_msg.edit_text(
                 f"❌ Gate collapsed: unable to breach this dungeon.\nError: {str(e)[:150]}"
             )
-    # ===============================
-    # Avvio stabile
-    # ===============================
+
+# ===============================
+# Avvio stabile
+# ===============================
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
