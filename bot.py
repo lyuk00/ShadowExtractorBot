@@ -121,7 +121,8 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "no_warnings": True,
         "retries": 3,
         "concurrent_fragment_downloads": 1,
-        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3",  # Fix bot detection
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3",
+        "cookiefile": "cookies.txt"  # Fix bot detection su YouTube
     }
     with tempfile.TemporaryDirectory() as tmpdir:
         ydl_opts["outtmpl"] = os.path.join(tmpdir, "%(title)s.%(ext)s")
@@ -163,6 +164,7 @@ if __name__ == "__main__":
    
     print("Shadow Extractor System online... Ready to raid gates. 🗡️")
     tg_app.run_polling()
+
 
 
 
