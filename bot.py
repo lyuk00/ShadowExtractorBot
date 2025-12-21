@@ -55,10 +55,10 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url_l = url.lower()
 
     # ===============================
-    # FIX X.COM /i/status/
+    # FIX X.COM /i/status/ → fixupx
     # ===============================
     if "x.com/i/status/" in url_l:
-        url = url.replace("/i/status/", "/status/")
+        url = url.replace("x.com", "fixupx.com")
         url_l = url.lower()
 
     status_msg = await update.message.reply_text(
