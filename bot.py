@@ -55,6 +55,24 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url_l = url.lower()
 
     # ===============================
+    # Controllo domini supportati
+    # ===============================
+    supported = False
+
+    if "tiktok" in url_l:
+        supported = True
+    elif "youtube.com" in url_l or "youtu.be" in url_l:
+        supported = True
+    elif "instagram.com/reel/" in url_l:
+        supported = True
+    elif re.search(r"x\.com/.+/status/\d+|twitter\.com/.+/status/\d+", url_l):
+        supported = True
+
+    # Se link non supportato → ignora completamente
+    if not supported:
+        return
+
+    # ===============================
     # FIX X.COM /i/status/ → fixupx
     # ===============================
     if "x.com/i/status/" in url_l:
