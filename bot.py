@@ -25,6 +25,22 @@ def home():
     return "Shadow Extractor System is alive. Ready to raid gates. 🗡️", 200
 
 # ===============================
+# Piattaforme supportate
+# ===============================
+SUPPORTED_DOMAINS = [
+    "tiktok.com", "vm.tiktok.com",
+    "instagram.com", "instagr.am",
+    "youtube.com", "youtu.be",
+    "twitter.com", "x.com",
+    "facebook.com", "fb.watch"
+]
+
+# ===============================
+# Cache semplice: url -> file_id
+# ===============================
+CACHE = {}
+
+# ===============================
 # Regex URL
 # ===============================
 URL_REGEX = re.compile(r'https?://[^\s]+', re.IGNORECASE)
@@ -40,6 +56,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Instagram Reels\n"
         "• TikTok (videos & photo gates)\n"
         "• YouTube Shorts\n"
+        "• X/Twitter posts\n"
         "• And many other dungeons...\n\n"
         "I will extract the essence in MAX QUALITY without watermark. ⚔️\n"
         "Level up your library. Rise, Hunter."
@@ -50,15 +67,31 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     urls = URL_REGEX.findall(message_text)
     if not urls:
         return
-    url = urls[0]
+    url = urls[0].lower()
+
+    # ===============================
+    # Ignora silenziosamente link non supportati
+    # ===============================
+    if not any(domain in url for domain in SUPPORTED_DOMAINS):
+        return  # Nessun messaggio, ignora completamente
+
     status_msg = await update.message.reply_text(
         "🗡️ Opening the Gate... Extracting shadow essence."
     )
 
     # ===============================
-    # TikTok via API (alta qualità)
+    # Cache check
     # ===============================
-    if "tiktok" in url.lower():
+    if url in CACHE:
+        await status_msg.edit_text("🗡️ Loot already extracted. Delivering from Shadow Vault...")
+        await update.message.reply_video(video=CACHE[url], caption="🗡️ From cache – instant delivery ⚔️")
+        await status_msg.delete()
+        return
+
+    # ===============================
+    # TikTok via API
+    # ===============================
+    if "tiktok" in url:
         await status_msg.edit_text("🗡️ TikTok Gate detected... entering Shadow Realm.")
         try:
             api_url = "https://www.tikwm.com/api/"
@@ -80,7 +113,11 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             video_url = video_data.get("hdplay") or video_data.get("play") or video_data.get("wmplay")
             video_resp = requests.get(video_url, timeout=60)
-            await update.message.reply_video(video=video_resp.content, caption=f"🗡️ {title}\nCleared in MAX QUALITY without watermark ⚔️")
+            sent_video = await update.message.reply_video(
+                video=video_resp.content,
+                caption=f"🗡️ {title}\nCleared in MAX QUALITY without watermark ⚔️"
+            )
+            CACHE[url] = sent_video.video.file_id
             music_resp = requests.get(music_url, timeout=60)
             await update.message.reply_audio(audio=music_resp.content, caption=f"🎵 Original BGM: {music_title}")
             await status_msg.delete()
@@ -90,7 +127,7 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     # ===============================
-    # Tutto il resto via yt-dlp con fallback qualità
+    # Tutto il resto via yt-dlp con fallback
     # ===============================
     await status_msg.edit_text("🗡️ Attempting MAX QUALITY extraction...")
     ydl_opts_high = {
@@ -101,7 +138,7 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "no_warnings": True,
         "retries": 3,
         "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3",
-        "cookiefile": "cookies.txt",  # Prova con cookies per max quality
+        "cookiefile": "cookies.txt",
     }
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -109,7 +146,7 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             with yt_dlp.YoutubeDL(ydl_opts_high) as ydl:
                 info = ydl.extract_info(url, download=True)
-                filename = ydl.prepare_filename(info)
+            filename = ydl.prepare_filename(info)
             quality_note = "MAX QUALITY"
         except:
             await status_msg.edit_text("🗡️ MAX QUALITY blocked... falling back to HIGH QUALITY.")
@@ -123,14 +160,18 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3",
             }
             ydl_opts_safe["outtmpl"] = os.path.join(tmpdir, "%(title)s.%(ext)s")
-            with yt_dlp.YoutubeDL(ydl_opts_safe) as ydl:
-                info = ydl.extract_info(url, download=True)
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts_safe) as ydl:
+                    info = ydl.extract_info(url, download=True)
                 filename = ydl.prepare_filename(info)
-            quality_note = "HIGH QUALITY (fallback)"
+                quality_note = "HIGH QUALITY (fallback)"
+            except Exception as e:
+                await status_msg.edit_text(f"❌ Gate collapsed: unable to breach this dungeon.\nError: {str(e)[:150]}")
+                return
 
         await status_msg.edit_text(f"⚔️ Extraction complete. Delivering the loot in {quality_note}...")
         with open(filename, "rb") as video_file:
-            await update.message.reply_video(
+            sent_video = await update.message.reply_video(
                 video=video_file,
                 caption=(
                     f"🗡️ {info.get('title', 'Essence')}\n"
@@ -138,6 +179,7 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "Rank up, Hunter."
                 ),
             )
+        CACHE[url] = sent_video.video.file_id
         await status_msg.delete()
 
 # ===============================
@@ -148,18 +190,11 @@ def run_flask():
     app.run(host="0.0.0.0", port=port)
 
 if __name__ == "__main__":
-    # Flask in thread separato
     Thread(target=run_flask, daemon=True).start()
 
-    # Bot Telegram
     tg_app = Application.builder().token(TOKEN).build()
     tg_app.add_handler(CommandHandler("start", start))
     tg_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, download_video))
 
     print("Shadow Extractor System online... Ready to raid gates. 🗡️")
     tg_app.run_polling()
-
-
-
-
-
