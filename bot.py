@@ -73,7 +73,7 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Ignora silenziosamente link non supportati
     # ===============================
     if not any(domain in url for domain in SUPPORTED_DOMAINS):
-        return  # Nessun messaggio, ignora completamente
+        return
 
     status_msg = await update.message.reply_text(
         "🗡️ Opening the Gate... Extracting shadow essence."
@@ -127,7 +127,7 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     # ===============================
-    # Tutto il resto via yt-dlp con fallback
+    # Tutto il resto via yt-dlp con fallback e gestione immagini
     # ===============================
     await status_msg.edit_text("🗡️ Attempting MAX QUALITY extraction...")
     ydl_opts_high = {
@@ -146,9 +146,30 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             with yt_dlp.YoutubeDL(ydl_opts_high) as ydl:
                 info = ydl.extract_info(url, download=True)
+            # Gestione immagini (X/Twitter/Instagram se presenti)
+            if info.get("images"):
+                await status_msg.edit_text(f"🗡️ Photo Gate breached!\n{len(info['images'])} shadows extracted.")
+                media_group = [InputMediaPhoto(media=requests.get(img['url'], timeout=30).content) for img in info["images"]]
+                await update.message.reply_media_group(media=media_group)
+                await status_msg.delete()
+                return
             filename = ydl.prepare_filename(info)
             quality_note = "MAX QUALITY"
-        except:
+        except Exception as e:
+            if "No video" in str(e) or "Video unavailable" in str(e) or "empty media response" in str(e).lower():
+                await status_msg.edit_text("🗡️ This gate is locked or has no video. Checking for photos...")
+                try:
+                    with yt_dlp.YoutubeDL(ydl_opts_high) as ydl:
+                        info = ydl.extract_info(url, download=False)  # Solo info, no download
+                    if info.get("images"):
+                        await status_msg.edit_text(f"🗡️ Photo Gate breached!\n{len(info['images'])} shadows extracted.")
+                        media_group = [InputMediaPhoto(media=requests.get(img['url'], timeout=30).content) for img in info["images"]]
+                        await update.message.reply_media_group(media=media_group)
+                        await status_msg.delete()
+                        return
+                except:
+                    await status_msg.edit_text("❌ Gate collapsed: No video or photos accessible.")
+                    return
             await status_msg.edit_text("🗡️ MAX QUALITY blocked... falling back to HIGH QUALITY.")
             ydl_opts_safe = {
                 "format": "best[height<=720]/best",
