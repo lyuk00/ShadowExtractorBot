@@ -59,10 +59,10 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not urls:
         return
 
-    url = urls[0].lower()
+    url = urls[0]              # URL ORIGINALE (NON TOCCARE)
+    url_l = url.lower()        # solo per controlli
 
-    # 🔒 ignora link non supportati
-    if not any(d in url for d in SUPPORTED_DOMAINS):
+    if not any(d in url_l for d in SUPPORTED_DOMAINS):
         return
 
     status_msg = await update.message.reply_text(
@@ -72,7 +72,7 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ===============================
     # TikTok via API
     # ===============================
-    if "tiktok.com" in url:
+    if "tiktok.com" in url_l:
         await status_msg.edit_text("🗡️ TikTok Gate detected... entering Shadow Realm.")
 
         try:
@@ -84,20 +84,14 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             video_data = data["data"]
             title = video_data.get("title", "Shadow Essence")
-            music_url = video_data.get("music")
 
-            # Foto TikTok
             if video_data.get("images"):
-                media = [
-                    InputMediaPhoto(media=img)
-                    for img in video_data["images"]
-                ]
+                media = [InputMediaPhoto(media=img) for img in video_data["images"]]
                 for i in range(0, len(media), 10):
                     await update.message.reply_media_group(media=media[i:i+10])
                 await status_msg.delete()
                 return
 
-            # Video TikTok
             video_url = (
                 video_data.get("hdplay")
                 or video_data.get("play")
@@ -120,14 +114,28 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ===============================
     cookies_path = "cookies.txt" if os.path.exists("cookies.txt") else None
 
+    is_instagram = "instagram.com" in url_l
+    is_twitter   = "x.com" in url_l or "twitter.com" in url_l
+
     ydl_opts = {
-        "format": "bestvideo+bestaudio/best",
         "merge_output_format": "mp4",
         "noplaylist": False,
         "quiet": True,
         "no_warnings": True,
         "retries": 3,
     }
+
+    # FORMAT CORRETTO PER PIATTAFORMA
+    if is_instagram:
+        ydl_opts["format"] = "best"
+        ydl_opts["extractor_args"] = {
+            "instagram": {
+                "skip_auth": True,
+                "include_reels": True
+            }
+        }
+    else:
+        ydl_opts["format"] = "bestvideo+bestaudio/best"
 
     if cookies_path:
         ydl_opts["cookiefile"] = cookies_path
