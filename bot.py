@@ -13,7 +13,7 @@ from datetime import datetime
 import requests
 import yt_dlp
 from flask import Flask
-from telegram import Update, InputMediaPhoto, InputMediaVideo
+from telegram import Update, InputMediaPhoto
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 # ===============================
@@ -132,6 +132,10 @@ async def run_subprocess(cmd: List[str]):
     return await loop.run_in_executor(None, lambda: subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE))
 
 def transcode_high_quality(input_path: str, output_path: str, max_bytes: int, max_width=1920, max_height=1080) -> str:
+    """
+    Transcode with robust parameters. Tries AAC, falls back to MP3 if AAC encoder missing.
+    Returns output_path on success or raises CalledProcessError.
+    """
     crf = 18
     while True:
         cmd = [
@@ -139,15 +143,46 @@ def transcode_high_quality(input_path: str, output_path: str, max_bytes: int, ma
             "-c:v", "libx264",
             "-preset", "slow",
             "-crf", str(crf),
+            "-pix_fmt", "yuv420p",
             "-maxrate", "8M",
             "-bufsize", "16M",
             "-vf", f"scale='min({max_width},iw)':'min({max_height},ih)':force_original_aspect_ratio=decrease",
             "-c:a", "aac",
             "-b:a", "128k",
+            "-ar", "44100",
+            "-ac", "2",
+            "-movflags", "+faststart",
             output_path
         ]
-        logger.info("Running ffmpeg CRF=%s", crf)
-        subprocess.run(cmd, check=True)
+        logger.info("Running ffmpeg (CRF=%s)", crf)
+        try:
+            proc = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        except subprocess.CalledProcessError as e:
+            stderr = e.stderr.decode(errors="ignore") if e.stderr else ""
+            logger.error("ffmpeg failed (CRF=%s): %s", crf, stderr)
+            # If AAC encoder missing or generic encoder init error, try fallback to libmp3lame
+            if "Unknown encoder 'aac'" in stderr or "Error while opening encoder for output stream #0:0" in stderr or "Invalid argument" in stderr:
+                logger.info("Attempting audio fallback to libmp3lame")
+                cmd_fallback = cmd.copy()
+                # replace "-c:a", "aac" with "libmp3lame"
+                for i, v in enumerate(cmd_fallback):
+                    if v == "-c:a" and i + 1 < len(cmd_fallback):
+                        cmd_fallback[i+1] = "libmp3lame"
+                        break
+                try:
+                    subprocess.run(cmd_fallback, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    size = os.path.getsize(output_path)
+                    logger.info("Fallback mp3 succeeded, size=%d", size)
+                    if size <= max_bytes or crf >= 28:
+                        return output_path
+                    crf += 2
+                    continue
+                except subprocess.CalledProcessError as e2:
+                    stderr2 = e2.stderr.decode(errors="ignore") if e2.stderr else ""
+                    logger.error("Fallback mp3 failed: %s", stderr2)
+                    raise
+            raise
+        # success
         size = os.path.getsize(output_path)
         logger.info("Transcoded size: %d bytes (limit %d)", size, max_bytes)
         if size <= max_bytes or crf >= 28:
@@ -245,198 +280,213 @@ async def download_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info("Request for URL: %s from %s", url, message.from_user.id)
     status = await message.reply_text("🗡️ Opening the gate...")
 
-    # cache check
-    cached = get_cache(url)
-    if cached:
-        file_id, kind, size, duration = cached
-        logger.info("Cache hit for %s kind=%s size=%s", url, kind, size)
-        caption = build_caption_html(url, {"duration": duration})
-        try:
-            if kind == "video":
-                await message.reply_video(video=file_id, caption=caption, parse_mode="HTML", disable_web_page_preview=True)
-            elif kind == "photo":
-                await message.reply_photo(photo=file_id, caption=caption, parse_mode="HTML", disable_web_page_preview=True)
-            else:
-                await message.reply_document(document=file_id, caption=caption, parse_mode="HTML", disable_web_page_preview=True)
-            await status.delete()
-            return
-        except Exception as e:
-            logger.exception("Failed to send cached file_id, will attempt fresh download: %s", e)
-
-    # TikTok quick API
-    if "tiktok.com" in url.lower():
-        try:
-            api_url = "https://www.tikwm.com/api/"
-            r = requests.get(api_url, params={"url": url}, timeout=30)
-            r.raise_for_status()
-            data = r.json()
-            if data.get("code") == 0:
-                data = data["data"]
-                if data.get("images"):
-                    images = data["images"]
-                    await send_image_group_safe(message, images, build_caption_html(url, None))
-                    await status.delete()
-                    return
-                video_url = data.get("hdplay") or data.get("play")
-                if video_url:
-                    sent = await message.reply_video(video=video_url, caption=build_caption_html(url, None), parse_mode="HTML", disable_web_page_preview=True)
-                    try:
-                        if sent.video:
-                            set_cache(url, sent.video.file_id, "video", sent.video.file_size or 0, sent.video.duration or 0)
-                    except Exception:
-                        pass
-                    await status.delete()
-                    return
-        except Exception as e:
-            logger.exception("TikTok API fallback failed: %s", e)
-
-    # yt-dlp probe
-    ydl_opts_probe = {
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
-        "extract_flat": False,
-    }
-    if COOKIEFILE:
-        ydl_opts_probe["cookiefile"] = COOKIEFILE
-
-    info = None
-    for attempt in range(MAX_DOWNLOAD_RETRIES + 1):
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts_probe) as ydl:
-                info = ydl.extract_info(url, download=False)
-            break
-        except Exception as e:
-            logger.exception("yt-dlp probe attempt %d failed for %s: %s", attempt + 1, url, e)
-            if attempt < MAX_DOWNLOAD_RETRIES:
-                await asyncio.sleep(1 + attempt * 2)
-            else:
-                await status.edit_text("❌ Gate collapsed while scanning the realm (metadata).")
-                return
-
-    if not info:
-        await status.edit_text("❌ No metadata found for this gate.")
-        return
-
-    extractor = (info.get("extractor_key") or "").lower()
-    logger.info("Extractor: %s", extractor)
-
-    # decide video vs images
-    if has_video_in_formats(info):
-        # proceed to video path
-        pass
-    else:
-        image_urls = extract_image_urls(info)
-        if image_urls:
-            caption = build_caption_html(url, info)
+    # Global safety wrapper to ensure user gets a response on unexpected errors
+    try:
+        # cache check
+        cached = get_cache(url)
+        if cached:
+            file_id, kind, size, duration = cached
+            logger.info("Cache hit for %s kind=%s size=%s", url, kind, size)
+            caption = build_caption_html(url, {"duration": duration})
             try:
-                await send_image_group_safe(message, image_urls, caption)
+                if kind == "video":
+                    await message.reply_video(video=file_id, caption=caption, parse_mode="HTML", disable_web_page_preview=True)
+                elif kind == "photo":
+                    await message.reply_photo(photo=file_id, caption=caption, parse_mode="HTML", disable_web_page_preview=True)
+                else:
+                    await message.reply_document(document=file_id, caption=caption, parse_mode="HTML", disable_web_page_preview=True)
                 await status.delete()
                 return
             except Exception as e:
-                logger.exception("Failed to send images, will try video path if available: %s", e)
-                # continue to video path as fallback
+                logger.exception("Failed to send cached file_id, will attempt fresh download: %s", e)
 
-    # VIDEO PATH
-    ydl_opts_dl = {
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
-        "format": "bestvideo+bestaudio/best",
-        "merge_output_format": "mp4",
-        "outtmpl": os.path.join(tempfile.gettempdir(), "shadow_%(id)s.%(ext)s"),
-    }
-    if COOKIEFILE:
-        ydl_opts_dl["cookiefile"] = COOKIEFILE
-
-    filename = None
-    final_info = None
-    for attempt in range(MAX_DOWNLOAD_RETRIES + 1):
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts_dl) as ydl:
-                final_info = ydl.extract_info(url, download=True)
-                filename = ydl.prepare_filename(final_info)
-            break
-        except Exception as e:
-            logger.exception("yt-dlp download attempt %d failed for %s: %s", attempt + 1, url, e)
-            if attempt < MAX_DOWNLOAD_RETRIES:
-                await asyncio.sleep(1 + attempt * 2)
-            else:
-                await status.edit_text("❌ Gate collapse while materializing the file.")
-                return
-
-    if not filename or not os.path.exists(filename):
-        logger.error("Downloaded file not found for %s", url)
-        await status.edit_text("❌ Artifact not produced by the gate.")
-        return
-
-    size = os.path.getsize(filename)
-    duration = final_info.get("duration") if final_info else None
-    caption = build_caption_html(url, final_info)
-
-    logger.info("Downloaded file %s size=%d duration=%s", filename, size, duration)
-
-    # send original if within limit
-    if size <= TELEGRAM_LIMIT_BYTES:
-        try:
-            with open(filename, "rb") as f:
-                sent = await message.reply_video(video=f, caption=caption, parse_mode="HTML", disable_web_page_preview=True)
+        # TikTok quick API
+        if "tiktok.com" in url.lower():
             try:
-                if sent.video:
-                    set_cache(url, sent.video.file_id, "video", sent.video.file_size or size, sent.video.duration or duration)
-            except Exception:
-                pass
-            await status.delete()
+                api_url = "https://www.tikwm.com/api/"
+                r = requests.get(api_url, params={"url": url}, timeout=30)
+                r.raise_for_status()
+                data = r.json()
+                if data.get("code") == 0:
+                    data = data["data"]
+                    if data.get("images"):
+                        images = data["images"]
+                        await send_image_group_safe(message, images, build_caption_html(url, None))
+                        await status.delete()
+                        return
+                    video_url = data.get("hdplay") or data.get("play")
+                    if video_url:
+                        sent = await message.reply_video(video=video_url, caption=build_caption_html(url, None), parse_mode="HTML", disable_web_page_preview=True)
+                        try:
+                            if sent.video:
+                                set_cache(url, sent.video.file_id, "video", sent.video.file_size or 0, sent.video.duration or 0)
+                        except Exception:
+                            pass
+                        await status.delete()
+                        return
+            except Exception as e:
+                logger.exception("TikTok API fallback failed: %s", e)
+
+        # yt-dlp probe
+        ydl_opts_probe = {
+            "quiet": True,
+            "no_warnings": True,
+            "noplaylist": True,
+            "extract_flat": False,
+        }
+        if COOKIEFILE:
+            ydl_opts_probe["cookiefile"] = COOKIEFILE
+
+        info = None
+        for attempt in range(MAX_DOWNLOAD_RETRIES + 1):
             try:
-                os.remove(filename)
-            except Exception:
-                pass
+                logger.info("Step: probe metadata (attempt %d)", attempt + 1)
+                with yt_dlp.YoutubeDL(ydl_opts_probe) as ydl:
+                    info = ydl.extract_info(url, download=False)
+                break
+            except Exception as e:
+                logger.exception("yt-dlp probe attempt %d failed for %s: %s", attempt + 1, url, e)
+                if attempt < MAX_DOWNLOAD_RETRIES:
+                    await asyncio.sleep(1 + attempt * 2)
+                else:
+                    await status.edit_text("❌ Gate collapsed while scanning the realm (metadata).")
+                    return
+
+        if not info:
+            await status.edit_text("❌ No metadata found for this gate.")
             return
-        except Exception as e:
-            logger.exception("Failed to send original video: %s", e)
 
-    # transcode if too large
-    try:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            out_path = os.path.join(tmpdir, f"transcoded_{os.path.basename(filename)}")
-            logger.info("Transcoding %s -> %s", filename, out_path)
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, transcode_high_quality, filename, out_path, TELEGRAM_LIMIT_BYTES, 1920, 1080)
-            if not os.path.exists(out_path):
-                logger.error("Transcode produced no file")
-                await status.edit_text("❌ Gate failed during transcode.")
-                return
-            out_size = os.path.getsize(out_path)
-            logger.info("Transcoded file size: %d", out_size)
-            if out_size > TELEGRAM_LIMIT_BYTES:
-                await status.edit_text("❌ Artifact too heavy even after transcode.")
-                return
-            with open(out_path, "rb") as f:
-                sent = await message.reply_video(video=f, caption=caption, parse_mode="HTML", disable_web_page_preview=True)
+        extractor = (info.get("extractor_key") or "").lower()
+        logger.info("Extractor: %s", extractor)
+
+        # decide video vs images
+        if has_video_in_formats(info):
+            logger.info("Step: detected video in metadata")
+            # proceed to video path
+            pass
+        else:
+            logger.info("Step: no video detected, checking images")
+            image_urls = extract_image_urls(info)
+            if image_urls:
+                caption = build_caption_html(url, info)
+                try:
+                    await send_image_group_safe(message, image_urls, caption)
+                    await status.delete()
+                    return
+                except Exception as e:
+                    logger.exception("Failed to send images, will try video path if available: %s", e)
+                    # continue to video path as fallback
+
+        # VIDEO PATH
+        ydl_opts_dl = {
+            "quiet": True,
+            "no_warnings": True,
+            "noplaylist": True,
+            "format": "bestvideo+bestaudio/best",
+            "merge_output_format": "mp4",
+            "outtmpl": os.path.join(tempfile.gettempdir(), "shadow_%(id)s.%(ext)s"),
+        }
+        if COOKIEFILE:
+            ydl_opts_dl["cookiefile"] = COOKIEFILE
+
+        filename = None
+        final_info = None
+        for attempt in range(MAX_DOWNLOAD_RETRIES + 1):
             try:
-                if sent.video:
-                    set_cache(url, sent.video.file_id, "video", sent.video.file_size or out_size, sent.video.duration or duration)
-            except Exception:
-                pass
-            await status.delete()
-            try:
-                os.remove(filename)
-            except Exception:
-                pass
+                logger.info("Step: video download attempt %d", attempt + 1)
+                with yt_dlp.YoutubeDL(ydl_opts_dl) as ydl:
+                    final_info = ydl.extract_info(url, download=True)
+                    filename = ydl.prepare_filename(final_info)
+                break
+            except Exception as e:
+                logger.exception("yt-dlp download attempt %d failed for %s: %s", attempt + 1, url, e)
+                if attempt < MAX_DOWNLOAD_RETRIES:
+                    await asyncio.sleep(1 + attempt * 2)
+                else:
+                    await status.edit_text("❌ Gate collapse while materializing the file.")
+                    return
+
+        if not filename or not os.path.exists(filename):
+            logger.error("Downloaded file not found for %s", url)
+            await status.edit_text("❌ Artifact not produced by the gate.")
             return
+
+        size = os.path.getsize(filename)
+        duration = final_info.get("duration") if final_info else None
+        caption = build_caption_html(url, final_info)
+
+        logger.info("Downloaded file %s size=%d duration=%s", filename, size, duration)
+
+        # send original if within limit
+        if size <= TELEGRAM_LIMIT_BYTES:
+            try:
+                with open(filename, "rb") as f:
+                    sent = await message.reply_video(video=f, caption=caption, parse_mode="HTML", disable_web_page_preview=True)
+                try:
+                    if sent.video:
+                        set_cache(url, sent.video.file_id, "video", sent.video.file_size or size, sent.video.duration or duration)
+                except Exception:
+                    pass
+                await status.delete()
+                try:
+                    os.remove(filename)
+                except Exception:
+                    pass
+                return
+            except Exception as e:
+                logger.exception("Failed to send original video: %s", e)
+
+        # transcode if too large
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                out_path = os.path.join(tmpdir, f"transcoded_{os.path.basename(filename)}")
+                logger.info("Transcoding %s -> %s", filename, out_path)
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, transcode_high_quality, filename, out_path, TELEGRAM_LIMIT_BYTES, 1920, 1080)
+                if not os.path.exists(out_path):
+                    logger.error("Transcode produced no file")
+                    await status.edit_text("❌ Gate failed during transcode.")
+                    return
+                out_size = os.path.getsize(out_path)
+                logger.info("Transcoded file size: %d", out_size)
+                if out_size > TELEGRAM_LIMIT_BYTES:
+                    await status.edit_text("❌ Artifact too heavy even after transcode.")
+                    return
+                with open(out_path, "rb") as f:
+                    sent = await message.reply_video(video=f, caption=caption, parse_mode="HTML", disable_web_page_preview=True)
+                try:
+                    if sent.video:
+                        set_cache(url, sent.video.file_id, "video", sent.video.file_size or out_size, sent.video.duration or duration)
+                except Exception:
+                    pass
+                await status.delete()
+                try:
+                    os.remove(filename)
+                except Exception:
+                    pass
+                return
+        except Exception as e:
+            logger.exception("Transcode/send error: %s", e)
+            await status.edit_text("❌ Gate failed while optimizing the artifact.")
+            # attempt to send as document if still possible
+            try:
+                await message.reply_text("Attempting to send as document (may fail if too large)...")
+                with open(filename, "rb") as f:
+                    await message.reply_document(document=f, caption=caption, parse_mode="HTML", disable_web_page_preview=True)
+                await status.delete()
+                return
+            except Exception as e2:
+                logger.exception("Final document send failed: %s", e2)
+                await status.edit_text("❌ Final gate attempt failed.")
+                return
+
     except Exception as e:
-        logger.exception("Transcode/send error: %s", e)
-        await status.edit_text("❌ Gate failed while optimizing the artifact.")
+        logger.exception("Unhandled error in download_media: %s", e)
         try:
-            await message.reply_text("Attempting to send as document (may fail if too large)...")
-            with open(filename, "rb") as f:
-                await message.reply_document(document=f, caption=caption, parse_mode="HTML", disable_web_page_preview=True)
-            await status.delete()
-            return
-        except Exception as e2:
-            logger.exception("Final document send failed: %s", e2)
-            await status.edit_text("❌ Final gate attempt failed.")
-            return
+            await status.edit_text("❌ Gate error: si è verificato un problema. Controlla i log.")
+        except Exception:
+            pass
+        return
 
 # ===============================
 # STARTUP
