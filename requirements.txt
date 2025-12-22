@@ -2,3 +2,4 @@ flask
 python-telegram-bot==20.7
 yt-dlp
 requests
+aiohttp>=3.8.5
