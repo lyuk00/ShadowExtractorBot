@@ -290,11 +290,11 @@ async def download_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             caption = build_caption_html(url, {"duration": duration})
             try:
                 if kind == "video":
-                    await message.reply_video(video=file_id, caption=caption, parse_mode="HTML", disable_web_page_preview=True)
+                    await message.reply_video(video=file_id, caption=caption, parse_mode="HTML")
                 elif kind == "photo":
-                    await message.reply_photo(photo=file_id, caption=caption, parse_mode="HTML", disable_web_page_preview=True)
+                    await message.reply_photo(photo=file_id, caption=caption, parse_mode="HTML")
                 else:
-                    await message.reply_document(document=file_id, caption=caption, parse_mode="HTML", disable_web_page_preview=True)
+                    await message.reply_document(document=file_id, caption=caption, parse_mode="HTML")
                 await status.delete()
                 return
             except Exception as e:
@@ -316,7 +316,7 @@ async def download_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         return
                     video_url = data.get("hdplay") or data.get("play")
                     if video_url:
-                        sent = await message.reply_video(video=video_url, caption=build_caption_html(url, None), parse_mode="HTML", disable_web_page_preview=True)
+                        sent = await message.reply_video(video=video_url, caption=build_caption_html(url, None), parse_mode="HTML")
                         try:
                             if sent.video:
                                 set_cache(url, sent.video.file_id, "video", sent.video.file_size or 0, sent.video.duration or 0)
@@ -421,7 +421,7 @@ async def download_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if size <= TELEGRAM_LIMIT_BYTES:
             try:
                 with open(filename, "rb") as f:
-                    sent = await message.reply_video(video=f, caption=caption, parse_mode="HTML", disable_web_page_preview=True)
+                    sent = await message.reply_video(video=f, caption=caption, parse_mode="HTML")
                 try:
                     if sent.video:
                         set_cache(url, sent.video.file_id, "video", sent.video.file_size or size, sent.video.duration or duration)
@@ -453,7 +453,7 @@ async def download_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await status.edit_text("❌ Artifact too heavy even after transcode.")
                     return
                 with open(out_path, "rb") as f:
-                    sent = await message.reply_video(video=f, caption=caption, parse_mode="HTML", disable_web_page_preview=True)
+                    sent = await message.reply_video(video=f, caption=caption, parse_mode="HTML")
                 try:
                     if sent.video:
                         set_cache(url, sent.video.file_id, "video", sent.video.file_size or out_size, sent.video.duration or duration)
@@ -472,7 +472,7 @@ async def download_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 await message.reply_text("Attempting to send as document (may fail if too large)...")
                 with open(filename, "rb") as f:
-                    await message.reply_document(document=f, caption=caption, parse_mode="HTML", disable_web_page_preview=True)
+                    await message.reply_document(document=f, caption=caption, parse_mode="HTML")
                 await status.delete()
                 return
             except Exception as e2:
