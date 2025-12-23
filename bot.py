@@ -16,137 +16,140 @@ if not TOKEN:
     raise RuntimeError("TOKEN not found in environment variables")
 
 # ===============================
-# Flask (Render keep-alive)
+# Flask app for Render always-on
 # ===============================
 app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Shadow Extractor System online 🗡️", 200
+    return "Shadow Extractor System is alive. Ready to raid gates. 🗡️", 200
 
 # ===============================
-# URL regex + allowed domains
+# Regex URL
 # ===============================
 URL_REGEX = re.compile(r'https?://[^\s]+', re.IGNORECASE)
-ALLOWED_DOMAINS = (
-    "tiktok.com",
-    "instagram.com",
-    "x.com",
-    "twitter.com",
-    "youtu.be",
-    "youtube.com",
-)
 
 # ===============================
 # Telegram handlers
 # ===============================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🗡️ Shadow Extractor ready.")
+    await update.message.reply_text(
+        "🗡️ Shadow Extractor System activated.\n\n"
+        "I am the Gatekeeper of forbidden content.\n"
+        "Send me a link from:\n"
+        "• Instagram Reels\n"
+        "• TikTok (videos & photo gates)\n"
+        "• YouTube Shorts\n"
+        "• And many other dungeons...\n\n"
+        "I will extract the essence in MAX QUALITY without watermark. ⚔️\n"
+        "Level up your library. Rise, Hunter."
+    )
 
-# ===============================
-# MAIN HANDLER
-# ===============================
-async def download_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text or ""
-    urls = URL_REGEX.findall(text)
+async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message_text = update.message.text or ""
+    urls = URL_REGEX.findall(message_text)
     if not urls:
         return
     url = urls[0]
-    # 🔒 IGNORA link non supportati
-    if not any(domain in url.lower() for domain in ALLOWED_DOMAINS):
-        return
-    status = await update.message.reply_text("🗡️ Opening the gate...")
+    status_msg = await update.message.reply_text(
+        "🗡️ Opening the Gate... Extracting shadow essence."
+    )
     # ===============================
-    # TikTok (API)
+    # TikTok via API (alta qualità)
     # ===============================
-    if "tiktok.com" in url.lower():
+    if "tiktok" in url.lower():
+        await status_msg.edit_text("🗡️ TikTok Gate detected... entering Shadow Realm.")
         try:
             api_url = "https://www.tikwm.com/api/"
-            r = requests.get(api_url, params={"url": url}, timeout=30).json()
-            if r.get("code") != 0:
-                raise Exception("TikTok gate sealed")
-            data = r["data"]
-            # Photo post
-            if data.get("images"):
-                media = [InputMediaPhoto(media=img) for img in data["images"]]
-                await update.message.reply_media_group(media)
-                await status.delete()
+            response = requests.get(api_url, params={"url": url}, timeout=30)
+            data = response.json()
+            if data.get("code") != 0:
+                raise Exception("Shadow Realm sealed")
+            video_data = data["data"]
+            title = video_data.get("title", "Shadow Essence").strip()
+            music_title = video_data.get("music_info", {}).get("title", "Necromancer's Tune")
+            music_url = video_data["music"]
+            if video_data.get("images"):
+                await status_msg.edit_text(f"🗡️ Photo Gate breached!\n{len(video_data['images'])} shadows + BGM extracted.")
+                media_group = [InputMediaPhoto(media=requests.get(img, timeout=30).content) for img in video_data["images"]]
+                await update.message.reply_media_group(media=media_group)
+                music_resp = requests.get(music_url, timeout=60)
+                await update.message.reply_audio(audio=music_resp.content, caption=f"🎵 BGM: {music_title}")
+                await status_msg.delete()
                 return
-            # Video
-            video_url = data.get("hdplay") or data.get("play")
-            await update.message.reply_video(video=video_url)
-            await status.delete()
+            video_url = video_data.get("hdplay") or video_data.get("play") or video_data.get("wmplay")
+            video_resp = requests.get(video_url, timeout=60)
+            await update.message.reply_video(video=video_resp.content, caption=f"🗡️ {title}\nCleared in MAX QUALITY without watermark ⚔️")
+            music_resp = requests.get(music_url, timeout=60)
+            await update.message.reply_audio(audio=music_resp.content, caption=f"🎵 Original BGM: {music_title}")
+            await status_msg.delete()
             return
-        except:
-            await status.edit_text("❌ TikTok gate collapsed.")
-            await status.delete()
+        except Exception as err:
+            await status_msg.edit_text(f"❌ Gate collapsed: {str(err)[:200]}")
             return
     # ===============================
-    # yt-dlp (X / IG / YT)
+    # Tutto il resto via yt-dlp con fallback qualità
     # ===============================
-    ydl_opts = {
+    await status_msg.edit_text("🗡️ Attempting MAX QUALITY extraction...")
+    ydl_opts_high = {
+        "format": "bestvideo+bestaudio/best",
+        "noplaylist": True,
+        "merge_output_format": "mp4",
         "quiet": True,
         "no_warnings": True,
-        "noplaylist": True,
-        "cookiefile": "cookies.txt",
-        "extract_flat": False,
+        "retries": 3,
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3",
+        # Senza cookiefile, per metodo alternativo
     }
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-    except Exception as e:
-        await status.edit_text(f"❌ Gate collapsed: {str(e)[:100]}")
-        await status.delete()
-        return
-    # ===============================
-    # X / Twitter PHOTO TWEET
-    # ===============================
-    if "twitter" in info.get("extractor_key", "").lower():
-        entries = info.get("entries") or []
-        images = []
-        for e in entries:
-            if e.get("url") and e.get("ext") in ("jpg", "png", "webp"):
-                images.append(e["url"])
-        if images:
-            media = [InputMediaPhoto(media=img) for img in images]
-            await update.message.reply_media_group(media)
-            await status.delete()
-            return
-    # ===============================
-    # VIDEO (generic)
-    # ===============================
-    with tempfile.TemporaryDirectory() as tmp:
-        ydl_opts_dl = {
-            **ydl_opts,
-            "format": "bestvideo+bestaudio/best",
-            "merge_output_format": "mp4",
-            "outtmpl": os.path.join(tmp, "%(title)s.%(ext)s"),
-        }
+    with tempfile.TemporaryDirectory() as tmpdir:
+        ydl_opts_high["outtmpl"] = os.path.join(tmpdir, "%(title)s.%(ext)s")
         try:
-            with yt_dlp.YoutubeDL(ydl_opts_dl) as ydl:
+            with yt_dlp.YoutubeDL(ydl_opts_high) as ydl:
                 info = ydl.extract_info(url, download=True)
                 filename = ydl.prepare_filename(info)
-        except Exception as e:
-            if "Sign in to confirm" in str(e) or "Video unavailable" in str(e):
-                await status.edit_text("🗡️ YouTube gate locked. Update cookies or check video access.")
-            else:
-                await status.edit_text(f"❌ Gate collapsed: {str(e)[:100]}")
-            await status.delete()
-            return
-        with open(filename, "rb") as f:
-            await update.message.reply_video(video=f)
-            await status.delete()
+            quality_note = "MAX QUALITY"
+        except:
+            await status_msg.edit_text("🗡️ MAX QUALITY blocked... falling back to HIGH QUALITY.")
+            ydl_opts_safe = {
+                "format": "best[height<=720]/best",
+                "noplaylist": True,
+                "merge_output_format": "mp4",
+                "quiet": True,
+                "no_warnings": True,
+                "retries": 3,
+                "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3",
+            }
+            ydl_opts_safe["outtmpl"] = os.path.join(tmpdir, "%(title)s.%(ext)s")
+            with yt_dlp.YoutubeDL(ydl_opts_safe) as ydl:
+                info = ydl.extract_info(url, download=True)
+                filename = ydl.prepare_filename(info)
+            quality_note = "HIGH QUALITY (fallback)"
+        await status_msg.edit_text(f"⚔️ Extraction complete. Delivering the loot in {quality_note}...")
+        with open(filename, "rb") as video_file:
+            await update.message.reply_video(
+                video=video_file,
+                caption=(
+                    f"🗡️ {info.get('title', 'Essence')}\n"
+                    f"Extracted from {info.get('extractor_key', 'Gate')} in {quality_note}\n"
+                    "Rank up, Hunter."
+                ),
+            )
+        await status_msg.delete()
 
 # ===============================
-# RUN
+# Avvio stabile
 # ===============================
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
 
 if __name__ == "__main__":
+    # Flask in thread separato
     Thread(target=run_flask, daemon=True).start()
-    tg = Application.builder().token(TOKEN).build()
-    tg.add_handler(CommandHandler("start", start))
-    tg.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, download_media))
-    tg.run_polling()
+    # Bot Telegram
+    tg_app = Application.builder().token(TOKEN).build()
+    tg_app.add_handler(CommandHandler("start", start))
+    tg_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, download_video))
+    print("Shadow Extractor System online... Ready to raid gates. 🗡️")
+    tg_app.run_polling()
+
