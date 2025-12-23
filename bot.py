@@ -28,7 +28,6 @@ def home():
 # URL regex + allowed domains
 # ===============================
 URL_REGEX = re.compile(r'https?://[^\s]+', re.IGNORECASE)
-
 ALLOWED_DOMAINS = (
     "tiktok.com",
     "instagram.com",
@@ -52,15 +51,11 @@ async def download_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     urls = URL_REGEX.findall(text)
     if not urls:
         return
-
     url = urls[0]
-
     # 🔒 IGNORA link non supportati
     if not any(domain in url.lower() for domain in ALLOWED_DOMAINS):
         return
-
     status = await update.message.reply_text("🗡️ Opening the gate...")
-
     # ===============================
     # TikTok (API)
     # ===============================
@@ -70,26 +65,22 @@ async def download_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             r = requests.get(api_url, params={"url": url}, timeout=30).json()
             if r.get("code") != 0:
                 raise Exception("TikTok gate sealed")
-
             data = r["data"]
-
             # Photo post
             if data.get("images"):
                 media = [InputMediaPhoto(media=img) for img in data["images"]]
                 await update.message.reply_media_group(media)
                 await status.delete()
                 return
-
             # Video
             video_url = data.get("hdplay") or data.get("play")
             await update.message.reply_video(video=video_url)
             await status.delete()
             return
-
         except:
+            await status.edit_text("❌ TikTok gate collapsed.")
             await status.delete()
             return
-
     # ===============================
     # yt-dlp (X / IG / YT)
     # ===============================
@@ -100,31 +91,27 @@ async def download_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "cookiefile": "cookies.txt",
         "extract_flat": False,
     }
-
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
-    except:
+    except Exception as e:
+        await status.edit_text(f"❌ Gate collapsed: {str(e)[:100]}")
         await status.delete()
         return
-
     # ===============================
     # X / Twitter PHOTO TWEET
     # ===============================
     if "twitter" in info.get("extractor_key", "").lower():
         entries = info.get("entries") or []
-
         images = []
         for e in entries:
             if e.get("url") and e.get("ext") in ("jpg", "png", "webp"):
                 images.append(e["url"])
-
         if images:
             media = [InputMediaPhoto(media=img) for img in images]
             await update.message.reply_media_group(media)
             await status.delete()
             return
-
     # ===============================
     # VIDEO (generic)
     # ===============================
@@ -135,19 +122,20 @@ async def download_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "merge_output_format": "mp4",
             "outtmpl": os.path.join(tmp, "%(title)s.%(ext)s"),
         }
-
         try:
             with yt_dlp.YoutubeDL(ydl_opts_dl) as ydl:
                 info = ydl.extract_info(url, download=True)
                 filename = ydl.prepare_filename(info)
-        except:
+        except Exception as e:
+            if "Sign in to confirm" in str(e) or "Video unavailable" in str(e):
+                await status.edit_text("🗡️ YouTube gate locked. Update cookies or check video access.")
+            else:
+                await status.edit_text(f"❌ Gate collapsed: {str(e)[:100]}")
             await status.delete()
             return
-
         with open(filename, "rb") as f:
             await update.message.reply_video(video=f)
-
-        await status.delete()
+            await status.delete()
 
 # ===============================
 # RUN
@@ -158,9 +146,7 @@ def run_flask():
 
 if __name__ == "__main__":
     Thread(target=run_flask, daemon=True).start()
-
     tg = Application.builder().token(TOKEN).build()
     tg.add_handler(CommandHandler("start", start))
     tg.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, download_media))
-
     tg.run_polling()
