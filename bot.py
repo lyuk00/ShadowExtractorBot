@@ -172,4 +172,3 @@ if __name__ == "__main__":
 
     print("Zani is online and ready.")
     tg_app.run_polling()
-```
