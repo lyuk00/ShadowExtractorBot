@@ -46,8 +46,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(testo_benvenuto)
 
+# Funzione yt-dlp in thread
 def esegui_ytdlp(url, tmpdir):
-    """Esegue yt-dlp in modo sincrono, verrà chiamato in un thread separato"""
     ydl_opts = {
         'format': 'bestvideo[filesize<45M]+bestaudio/best[filesize<45M]/best',
         'noplaylist': True,
@@ -63,27 +63,41 @@ def esegui_ytdlp(url, tmpdir):
         return info, filepath
 
 async def download_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message_text = update.message.text or ""
+    if not update.message:
+        return
+
+    message_text = update.message.text or update.message.caption or ""
     urls = URL_REGEX.findall(message_text)
+
     if not urls:
         return
 
-    url = urls[0]
+    url = urls[0].lower()
 
-    # 1. Try deleting user message
+    # Solo link supportati
+    supported_domains = [
+        "youtube.com",
+        "youtu.be",
+        "tiktok.com",
+        "vm.tiktok.com",
+        "instagram.com",
+        "x.com",
+        "twitter.com"
+    ]
+
+    if not any(domain in url for domain in supported_domains):
+        return   # Ignora link non supportati
+
     try:
         await update.message.delete()
     except Exception:
         pass
 
-    # 2. Status message
     status_msg = await update.message.reply_text("⏳ Give me a moment. I'm checking the link...")
 
     try:
-        # ===============================
-        # TikTok API logic
-        # ===============================
-        if "tiktok.com" in url.lower() or "vm.tiktok.com" in url.lower():
+        # ================= TikTok =================
+        if "tiktok.com" in url or "vm.tiktok.com" in url:
             async with aiohttp.ClientSession() as session:
                 api_url = "https://www.tikwm.com/api/"
                 async with session.get(api_url, params={"url": url}) as resp:
@@ -95,14 +109,13 @@ async def download_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             video_data = data["data"]
             title = video_data.get("title", "TikTok Media").strip()
 
-            # TikTok Images / Carousel
             if video_data.get("images"):
+                # Carousel di immagini
                 media_group = [InputMediaPhoto(media=img) for img in video_data["images"][:10]]
                 await update.message.reply_media_group(media=media_group)
                 await status_msg.delete()
                 return
 
-            # TikTok Video
             video_url = video_data.get("play")
             caption = f"📱 <b>{title[:100]}</b>\n\n🔗 <a href='{url}'>Original Source</a>"
 
@@ -114,9 +127,7 @@ async def download_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await status_msg.delete()
             return
 
-        # ===============================
-        # yt-dlp logic (YouTube, IG, X)
-        # ===============================
+        # ================= YouTube / Instagram / X =================
         await status_msg.edit_text("⬇️ Retrieving the media...")
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -167,8 +178,12 @@ if __name__ == "__main__":
     Thread(target=run_flask, daemon=True).start()
 
     tg_app = Application.builder().token(TOKEN).build()
+
     tg_app.add_handler(CommandHandler("start", start))
-    tg_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, download_media))
+
+    tg_app.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, download_media)
+    )
 
     print("Zani is online and ready.")
     tg_app.run_polling()
